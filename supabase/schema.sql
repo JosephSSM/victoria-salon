@@ -45,6 +45,11 @@ create index citas_cliente_id_idx on citas (cliente_id);
 create index citas_servicio_id_idx on citas (servicio_id);
 create index citas_fecha_idx on citas (fecha);
 
+-- Un solo turno activo por fecha+hora (salón como recurso único). Cancelada/
+-- completada no cuentan, así que un slot liberado por cancelación es reservable.
+create unique index citas_fecha_hora_activa_idx on citas (fecha, hora)
+  where estado in ('pendiente', 'confirmada');
+
 -- ============================================================
 -- 3. Rol admin: helper leído desde app_metadata del JWT
 -- ============================================================
@@ -130,7 +135,21 @@ create policy "citas_delete" on citas
   using (public.is_admin());
 
 -- ============================================================
--- 6. Seed: servicios (de components/landing/Services.tsx / lib/data.ts)
+-- 6. Grants: privilegios base de tabla que Postgres exige antes de que
+--    las políticas RLS entren en juego. Sin esto, RLS igual deniega todo
+--    con "permission denied for table X", sin importar las políticas.
+-- ============================================================
+grant usage on schema public to anon, authenticated;
+
+grant select on servicios to anon, authenticated;
+grant insert, update, delete on servicios to authenticated;
+
+grant select, update, delete on clientes to authenticated;
+
+grant select, insert, update, delete on citas to authenticated;
+
+-- ============================================================
+-- 7. Seed: servicios (de components/landing/Services.tsx / lib/data.ts)
 -- ============================================================
 insert into servicios (categoria, nombre, duracion_minutos, precio_euros) values
   ('peluqueria', 'Corte y peinado', 45, 18.00),

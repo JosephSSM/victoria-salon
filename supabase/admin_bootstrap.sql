@@ -4,4 +4,4 @@
 
 update auth.users
 set raw_app_meta_data = raw_app_meta_data || jsonb_build_object('role', 'admin')
-where email = 'CAMBIAR-por-email-real@ejemplo.com';
+where email = 'joseeph_s@hotmail.com';
