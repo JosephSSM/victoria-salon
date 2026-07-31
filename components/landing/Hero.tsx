@@ -22,7 +22,7 @@ export default function Hero() {
     <section ref={sectionRef} className="relative flex min-h-screen items-center overflow-hidden">
       <motion.div className="absolute -inset-y-[12%] inset-x-0" style={{ y: bgY }}>
         <Image
-          src="/images/gallery/salon-hero.png"
+          src="/images/gallery/salon-led.png"
           alt="Interior de Victoria Salón, Sant Cugat del Vallès"
           fill
           priority
