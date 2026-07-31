@@ -1,11 +1,12 @@
-"use client";
-
 import { playfairDisplay, manrope } from "@/lib/fonts";
 import { SERVICES } from "@/lib/data";
+import { getServiciosActivos } from "@/lib/services";
 import { BRAND } from "@/lib/theme";
 import Reveal from "./Reveal";
 
-export default function Services() {
+export default async function Services() {
+  const servicios = await getServiciosActivos();
+
   return (
     <section id="servicios" className="relative py-24" style={{ background: BRAND.ivory }}>
       <div className="mx-auto max-w-3xl px-6">
@@ -19,10 +20,13 @@ export default function Services() {
         </Reveal>
 
         <div className="flex flex-col">
-          {SERVICES.map((service, i) => {
-            const Icon = service.icon;
+          {SERVICES.map((category, i) => {
+            const Icon = category.icon;
+            const items = servicios.filter((s) => s.categoria === category.key);
+            if (items.length === 0) return null;
+
             return (
-              <Reveal key={service.key} delay={i * 0.08}>
+              <Reveal key={category.key} delay={i * 0.08}>
                 <div
                   className={`flex flex-col gap-4 py-8 sm:flex-row sm:items-start sm:justify-between ${i > 0 ? "border-t" : ""}`}
                   style={{ borderColor: `${BRAND.ink}1a` }}
@@ -36,22 +40,22 @@ export default function Services() {
                     </div>
                     <div>
                       <h3 className={`${playfairDisplay.className} text-xl`} style={{ color: BRAND.ink }}>
-                        {service.label}
+                        {category.label}
                       </h3>
                       <p className={`${manrope.className} mt-1 text-sm opacity-55`} style={{ color: BRAND.ink }}>
-                        {service.description}
+                        {category.description}
                       </p>
                     </div>
                   </div>
 
                   <ul className={`${manrope.className} flex flex-wrap gap-x-2 gap-y-2 sm:w-1/2 sm:justify-end`}>
-                    {service.items.map((item) => (
+                    {items.map((s) => (
                       <li
-                        key={item}
+                        key={s.id}
                         className="rounded-full border px-3 py-1.5 text-xs font-medium"
                         style={{ borderColor: `${BRAND.ink}1f`, color: BRAND.ink }}
                       >
-                        {item}
+                        {s.nombre} · {s.duracion_minutos} min · {s.precio_euros}€
                       </li>
                     ))}
                   </ul>

@@ -1,5 +1,3 @@
-"use client";
-
 import ScrollProgressBar from "./ScrollProgressBar";
 import Header from "./Header";
 import Hero from "./Hero";
