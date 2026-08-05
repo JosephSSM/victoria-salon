@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import type { Session } from "@supabase/supabase-js";
 import { Playfair_Display, Manrope, IBM_Plex_Mono } from "next/font/google";
 import {
   LayoutGrid,
@@ -16,7 +18,7 @@ import {
   Plus,
   Clock,
   CircleDot,
-  TrendingUp,
+  ShieldAlert,
   DollarSign,
   UserPlus,
   type LucideIcon,
@@ -32,6 +34,20 @@ import {
   Bar,
   CartesianGrid,
 } from "recharts";
+import { supabase } from "@/lib/supabase";
+import type { EstadoCita } from "@/lib/citas";
+import {
+  getResumenHoy,
+  getAgendaHoy,
+  getClientes,
+  getIngresosSemana,
+  getServiciosTop,
+  type ResumenHoy,
+  type AgendaItem,
+  type ClienteConVisitas,
+  type IngresoDia,
+  type ServicioTop,
+} from "@/lib/admin";
 
 const playfairDisplay = Playfair_Display({
   subsets: ["latin"],
@@ -85,50 +101,46 @@ const NAV: { key: NavKey; label: string; icon: LucideIcon }[] = [
   { key: "marketing", label: "Marketing", icon: Megaphone },
 ];
 
-const REVENUE = [
-  { d: "Lun", v: 420 },
-  { d: "Mar", v: 380 },
-  { d: "Mié", v: 510 },
-  { d: "Jue", v: 460 },
-  { d: "Vie", v: 690 },
-  { d: "Sáb", v: 820 },
-  { d: "Dom", v: 0 },
-];
+const ESTADO_LABEL: Record<EstadoCita, string> = {
+  pendiente: "Pendiente",
+  confirmada: "Confirmada",
+  cancelada: "Cancelada",
+  completada: "Completada",
+};
 
-const TOP_SERVICES = [
-  { s: "Corte y peinado", v: 34 },
-  { s: "Manicura semi", v: 28 },
-  { s: "Color completo", v: 21 },
-  { s: "Facial hidrat.", v: 17 },
-  { s: "Depilación", v: 15 },
-];
-
-const APPTS = [
-  { time: "09:30", client: "Marta Ruiz", service: "Corte y peinado", pro: "Ana", status: "Confirmada" },
-  { time: "10:15", client: "Laura Gómez", service: "Manicura semipermanente", pro: "Vic", status: "Confirmada" },
-  { time: "11:00", client: "Carla Medina", service: "Ritual facial", pro: "Sofía", status: "Pendiente" },
-  { time: "12:30", client: "Nuria Vidal", service: "Color completo", pro: "Ana", status: "Confirmada" },
-  { time: "16:00", client: "Ines Ferrer", service: "Depilación piernas", pro: "Sofía", status: "Cancelada" },
-  { time: "17:30", client: "Paula Soler", service: "Masaje relajante", pro: "Vic", status: "Confirmada" },
-];
-
-const CLIENTS = [
-  { name: "Marta Ruiz", visits: 12, last: "12 jul 2026", tag: "VIP" },
-  { name: "Laura Gómez", visits: 6, last: "18 jul 2026", tag: "Recurrente" },
-  { name: "Carla Medina", visits: 2, last: "05 jul 2026", tag: "Nueva" },
-  { name: "Nuria Vidal", visits: 9, last: "20 jul 2026", tag: "Recurrente" },
-];
-
-function statusColor(s: string) {
-  if (s === "Confirmada") return { bg: `${T.sage}1a`, fg: T.sage };
-  if (s === "Pendiente") return { bg: `${T.amber}1a`, fg: T.amber };
+function statusColor(s: EstadoCita) {
+  if (s === "confirmada") return { bg: `${T.sage}1a`, fg: T.sage };
+  if (s === "pendiente") return { bg: `${T.amber}1a`, fg: T.amber };
+  if (s === "completada") return { bg: `${T.gold}22`, fg: T.bordeauxDeep };
   return { bg: `${T.rustRed}1a`, fg: T.rustRed };
+}
+
+function clienteTag(c: ClienteConVisitas): string {
+  const inicioMes = new Date();
+  inicioMes.setDate(1);
+  inicioMes.setHours(0, 0, 0, 0);
+  if (new Date(c.fechaRegistro) >= inicioMes) return "Nueva";
+  if (c.visitas >= 8) return "VIP";
+  return "Recurrente";
 }
 
 function tagColor(t: string) {
   if (t === "VIP") return { bg: `${T.gold}22`, fg: T.bordeauxDeep };
   if (t === "Nueva") return { bg: `${T.sage}1a`, fg: T.sage };
   return { bg: `${T.line}`, fg: T.ink };
+}
+
+const eurFmt = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" });
+
+function formatFechaCorta(fecha: string): string {
+  return new Date(`${fecha}T00:00:00`).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function saludo(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Buenos días";
+  if (h < 20) return "Buenas tardes";
+  return "Buenas noches";
 }
 
 function KpiCard({
@@ -160,6 +172,84 @@ function KpiCard({
 
 export default function AdminDashboardPage() {
   const [tab, setTab] = useState<NavKey>("resumen");
+
+  const [session, setSession] = useState<Session | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  const [resumen, setResumen] = useState<ResumenHoy | null>(null);
+  const [agenda, setAgenda] = useState<AgendaItem[]>([]);
+  const [clientes, setClientes] = useState<ClienteConVisitas[]>([]);
+  const [ingresosSemana, setIngresosSemana] = useState<IngresoDia[]>([]);
+  const [serviciosTop, setServiciosTop] = useState<ServicioTop[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setCheckingSession(false);
+    });
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+
+    return () => subscription.subscription.unsubscribe();
+  }, []);
+
+  const isAdmin = session?.user?.app_metadata?.role === "admin";
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    setDataLoading(true);
+    setDataError(null);
+    Promise.all([getResumenHoy(), getAgendaHoy(), getClientes(), getIngresosSemana(), getServiciosTop()])
+      .then(([r, a, c, i, s]) => {
+        setResumen(r);
+        setAgenda(a);
+        setClientes(c);
+        setIngresosSemana(i);
+        setServiciosTop(s);
+      })
+      .catch((e) => setDataError(e instanceof Error ? e.message : "No se pudieron cargar los datos del panel."))
+      .finally(() => setDataLoading(false));
+  }, [isAdmin]);
+
+  const displayName =
+    (session?.user?.user_metadata?.full_name as string | undefined)?.trim() || session?.user?.email || "Admin";
+
+  if (checkingSession) {
+    return (
+      <div className={`${manrope.className} min-h-screen w-full flex items-center justify-center`} style={{ background: T.ivory, color: T.ink }}>
+        <p className="text-sm opacity-50">Cargando…</p>
+      </div>
+    );
+  }
+
+  if (!session || !isAdmin) {
+    return (
+      <div className={`${manrope.className} min-h-screen w-full flex items-center justify-center p-6`} style={{ background: T.ivory, color: T.ink }}>
+        <div className="w-full max-w-sm rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+          <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: `${T.rustRed}1a` }}>
+            <ShieldAlert size={22} color={T.rustRed} />
+          </div>
+          <h1 className={`${playfairDisplay.className} text-xl mb-2`}>Acceso denegado</h1>
+          <p className="text-sm opacity-60 mb-6">
+            {session
+              ? "Tu cuenta no tiene permisos de administración para ver este panel."
+              : "Necesitas iniciar sesión con una cuenta de administración para ver este panel."}
+          </p>
+          <Link
+            href="/"
+            className="inline-block px-6 py-3 rounded-full text-sm font-semibold text-white"
+            style={{ background: T.bordeaux }}
+          >
+            Volver al inicio
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -230,18 +320,53 @@ export default function AdminDashboardPage() {
 
         {/* CONTENT */}
         <main className="flex-1 overflow-auto px-8 py-7">
+          {dataError && (
+            <div className="mb-6 rounded-xl px-4 py-3 text-sm" style={{ background: `${T.rustRed}14`, color: T.rustRed }}>
+              {dataError}
+            </div>
+          )}
+
           {tab === "resumen" && (
             <>
               <div className="mb-6">
-                <h1 className={`${playfairDisplay.className} text-2xl`}>Buenos días, Victoria</h1>
-                <p className="text-sm opacity-50">Hoy, jueves 24 de julio de 2026</p>
+                <h1 className={`${playfairDisplay.className} text-2xl`}>
+                  {saludo()}, {displayName}
+                </h1>
+                <p className="text-sm opacity-50">
+                  Hoy,{" "}
+                  {new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                </p>
               </div>
 
               <div className="flex flex-wrap gap-4 mb-8">
-                <KpiCard icon={DollarSign} label="Ingresos hoy" value="€418" sub="+12% vs. ayer" accent={T.sage} />
-                <KpiCard icon={CalendarDays} label="Citas hoy" value="14" sub="2 pendientes de confirmar" accent={T.bordeaux} />
-                <KpiCard icon={UserPlus} label="Clientas nuevas" value="9" sub="este mes" accent={T.gold} />
-                <KpiCard icon={TrendingUp} label="Ocupación" value="82%" sub="franja 10:00–18:00" accent={T.rustRed} />
+                <KpiCard
+                  icon={DollarSign}
+                  label="Ingresos hoy"
+                  value={dataLoading ? "…" : eurFmt.format(resumen?.ingresosHoy ?? 0)}
+                  sub={dataLoading ? "" : `${resumen?.citasCompletadasHoy ?? 0} citas completadas`}
+                  accent={T.sage}
+                />
+                <KpiCard
+                  icon={CalendarDays}
+                  label="Citas hoy"
+                  value={dataLoading ? "…" : String(resumen?.citasHoy ?? 0)}
+                  sub="programadas hoy"
+                  accent={T.bordeaux}
+                />
+                <KpiCard
+                  icon={UserPlus}
+                  label="Clientas nuevas"
+                  value={dataLoading ? "…" : String(resumen?.clientasNuevasMes ?? 0)}
+                  sub="este mes"
+                  accent={T.gold}
+                />
+                <KpiCard
+                  icon={Clock}
+                  label="Citas pendientes"
+                  value={dataLoading ? "…" : String(resumen?.citasPendientesHoy ?? 0)}
+                  sub="por confirmar hoy"
+                  accent={T.rustRed}
+                />
               </div>
 
               <div className="grid lg:grid-cols-3 gap-6 mb-8">
@@ -251,7 +376,7 @@ export default function AdminDashboardPage() {
                     <span className="text-xs opacity-50">Últimos 7 días</span>
                   </div>
                   <ResponsiveContainer width="100%" height={220}>
-                    <AreaChart data={REVENUE}>
+                    <AreaChart data={ingresosSemana.map((d) => ({ d: d.dia, v: d.total }))}>
                       <defs>
                         <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor={T.bordeaux} stopOpacity={0.35} />
@@ -261,7 +386,10 @@ export default function AdminDashboardPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
                       <XAxis dataKey="d" tick={{ fontSize: 12, fill: T.ink, opacity: 0.5 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 11, fill: T.ink, opacity: 0.4 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={{ borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 12 }} />
+                      <Tooltip
+                        formatter={(value) => eurFmt.format(Number(value))}
+                        contentStyle={{ borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 12 }}
+                      />
                       <Area type="monotone" dataKey="v" stroke={T.bordeaux} strokeWidth={2} fill="url(#rev)" />
                     </AreaChart>
                   </ResponsiveContainer>
@@ -269,21 +397,25 @@ export default function AdminDashboardPage() {
 
                 <div className="rounded-2xl p-6" style={{ background: T.card, border: `1px solid ${T.line}` }}>
                   <h3 className="text-sm font-semibold mb-4">Servicios más solicitados</h3>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={TOP_SERVICES} layout="vertical" margin={{ left: 0 }}>
-                      <XAxis type="number" hide />
-                      <YAxis
-                        type="category"
-                        dataKey="s"
-                        width={110}
-                        tick={{ fontSize: 11, fill: T.ink, opacity: 0.7 }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <Tooltip contentStyle={{ borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 12 }} />
-                      <Bar dataKey="v" fill={T.gold} radius={[0, 6, 6, 0]} barSize={14} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {!dataLoading && serviciosTop.length === 0 ? (
+                    <p className="text-xs opacity-50 py-8 text-center">Sin citas completadas en los últimos 7 días.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={serviciosTop.map((s) => ({ s: s.nombre, v: s.total }))} layout="vertical" margin={{ left: 0 }}>
+                        <XAxis type="number" hide allowDecimals={false} />
+                        <YAxis
+                          type="category"
+                          dataKey="s"
+                          width={110}
+                          tick={{ fontSize: 11, fill: T.ink, opacity: 0.7 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip contentStyle={{ borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 12 }} />
+                        <Bar dataKey="v" fill={T.gold} radius={[0, 6, 6, 0]} barSize={14} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
                 </div>
               </div>
 
@@ -294,26 +426,29 @@ export default function AdminDashboardPage() {
                     Ver calendario completo
                   </button>
                 </div>
+                {dataLoading && <p className="text-sm opacity-50 py-6">Cargando agenda…</p>}
+                {!dataLoading && agenda.length === 0 && (
+                  <p className="text-sm opacity-50 py-6">No hay citas registradas para hoy.</p>
+                )}
                 <div className="flex flex-col">
-                  {APPTS.map((a, i) => {
-                    const sc = statusColor(a.status);
+                  {agenda.map((a, i) => {
+                    const sc = statusColor(a.estado);
                     return (
                       <div
-                        key={i}
-                        className={`flex items-center gap-4 py-3 ${i !== APPTS.length - 1 ? "border-b" : ""}`}
+                        key={a.id}
+                        className={`flex items-center gap-4 py-3 ${i !== agenda.length - 1 ? "border-b" : ""}`}
                         style={{ borderColor: T.line }}
                       >
                         <div className={`${ibmPlexMono.className} text-sm w-14 flex items-center gap-1.5 opacity-70`}>
-                          <Clock size={12} /> {a.time}
+                          <Clock size={12} /> {a.hora.slice(0, 5)}
                         </div>
-                        <div className="w-40 text-sm font-medium">{a.client}</div>
-                        <div className="flex-1 text-sm opacity-60">{a.service}</div>
-                        <div className="w-20 text-xs opacity-50">{a.pro}</div>
+                        <div className="w-40 text-sm font-medium">{a.clienteNombre}</div>
+                        <div className="flex-1 text-sm opacity-60">{a.servicioNombre}</div>
                         <span
                           className="px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1"
                           style={{ background: sc.bg, color: sc.fg }}
                         >
-                          <CircleDot size={9} /> {a.status}
+                          <CircleDot size={9} /> {ESTADO_LABEL[a.estado]}
                         </span>
                       </div>
                     );
@@ -340,16 +475,33 @@ export default function AdminDashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {CLIENTS.map((c, i) => {
-                      const tc = tagColor(c.tag);
+                    {dataLoading && (
+                      <tr>
+                        <td className="px-6 py-4 text-sm opacity-50" colSpan={4}>
+                          Cargando clientas…
+                        </td>
+                      </tr>
+                    )}
+                    {!dataLoading && clientes.length === 0 && (
+                      <tr>
+                        <td className="px-6 py-4 text-sm opacity-50" colSpan={4}>
+                          Aún no hay clientas registradas.
+                        </td>
+                      </tr>
+                    )}
+                    {clientes.map((c, i) => {
+                      const tag = clienteTag(c);
+                      const tc = tagColor(tag);
                       return (
-                        <tr key={i} className={i !== CLIENTS.length - 1 ? "border-b" : ""} style={{ borderColor: T.line }}>
-                          <td className="px-6 py-3.5 font-medium">{c.name}</td>
-                          <td className={`px-6 py-3.5 ${ibmPlexMono.className}`}>{c.visits}</td>
-                          <td className="px-6 py-3.5 opacity-60">{c.last}</td>
+                        <tr key={c.id} className={i !== clientes.length - 1 ? "border-b" : ""} style={{ borderColor: T.line }}>
+                          <td className="px-6 py-3.5 font-medium">{c.nombreCompleto || c.email}</td>
+                          <td className={`px-6 py-3.5 ${ibmPlexMono.className}`}>{c.visitas}</td>
+                          <td className="px-6 py-3.5 opacity-60">
+                            {c.ultimaVisita ? formatFechaCorta(c.ultimaVisita) : "—"}
+                          </td>
                           <td className="px-6 py-3.5">
                             <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold" style={{ background: tc.bg, color: tc.fg }}>
-                              {c.tag}
+                              {tag}
                             </span>
                           </td>
                         </tr>
